@@ -28,4 +28,4 @@ This is the base repo for the Olin Computational Robotics Robot Localization pro
   * Plot in RVIZ and make sure new robot pose is in the right spot and that a reasonable spot is chosen
 
 ### Logistics:
-We plan to do most of the code from scratch. 
+We plan to do most of the code from scratch.
