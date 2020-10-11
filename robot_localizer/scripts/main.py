@@ -3,8 +3,9 @@
 """ This is the starter code for the robot localization project """
 
 import rospy
-from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose, LaserScan, Odometry, Quaternion, Vector3
-from std_msgs.msg import ColorRBGA, Header
+from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose, Quaternion, Vector3, Point
+from sensor_msgs.msg import LaserScan
+from std_msgs.msg import ColorRGBA, Header
 from nav_msgs.msg import Odometry
 from helper_functions import TFHelper
 from occupancy_field import OccupancyField
@@ -14,25 +15,28 @@ from tf.transformations import euler_from_quaternion
 import tf2_geometry_msgs
 import math
 from scipy.stats import norm
-from visualization_msgs.msg import Marker
+from visualization_msgs.msg import Marker, MarkerArray
 
 
 class ParticleFilter():
 
     def __init__(self):
         #
+        rospy.init_node("lol")
         self.lidar_sub = rospy.Subscriber("/scan",LaserScan, self.lidar_callback)
         self.odom_sub = rospy.Subscriber("/odom",Odometry, self.odom_callback)
+        self.marker_pub = rospy.Publisher("/visualization", MarkerArray, queue_size=10)
 
         # reference frame transform tools
-        self.tf_buffer = tf2_ros.Buffer()
-        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
+        # self.tf_buffer = tf2_ros.Buffer()
+        # self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
-        self.occupancy_field = OccupancyField()
+        # self.occupancy_field = OccupancyField()
+        self.occupancy_field = None
         self.particles = []
-        self.number_of_particles = 1000
+        self.number_of_particles = 10
         self.pos_std_dev = 0.25
-        self.ori_std_dev = 25 * pi / 180
+        self.ori_std_dev = 25 * math.pi / 180
         self.lidar_std_dev = 0.05
         self.weights = []
         self.resample_threshold = 0.2
@@ -42,12 +46,12 @@ class ParticleFilter():
 
     def initial_sample_points(self, initial_pose_estimate):
         # samples a uniform distribution of points
-        for n in range(number_of_particles):
+        for n in range(self.number_of_particles):
             x = (initial_pose_estimate[0] + random.normalvariate(0, self.pos_std_dev))
             y = (initial_pose_estimate[1] + random.normalvariate(0, self.pos_std_dev))
             t = (initial_pose_estimate[2] + random.normalvariate(0, self.ori_std_dev))
-            self.particles[n] = (x,y,t)
-            self.weights[n] = 1
+            self.particles.append((x,y,t))
+            self.weights.append(1)
 
 
     def sample_points(self, weights):
@@ -120,9 +124,36 @@ class ParticleFilter():
 
         return xs, ys
 
-    def main(self):
+    def plot_particles(self):
+        marker_array = MarkerArray()
+        for i, particle in enumerate(self.particles):
+            nextMarker = Marker()
+            x = particle[0]
+            y = particle[1]
+            t = particle[2]
+            nextMarker.header = Header(stamp = rospy.Time.now(), frame_id="base_link")
+            nextMarker.id = i;
+            nextMarker.ns="particle"
+            nextMarker.type = Marker.ARROW
+            nextMarker.points = [Point(x,y,0), Point(math.sin(t), math.cos(t), 0)]
+            # nextMarker.pose = Pose(Point(x,y,0), Quaternion(0,0,0,0))
+            nextMarker.scale = Vector3(0.1,0.3,0.2)
+            nextMarker.color = ColorRGBA(0, 1, 0.5, 0.5)
+            nextMarker.action = Marker.ADD
+            marker_array.markers.append(nextMarker)
+        self.marker_pub.publish(marker_array)
 
-        pass
+    def main(self):
+        # while(not rospy.is_shutdown() and (self.scan == None or self.delta_pose == None)):
+        #     rospy.loginfo("Waiting for Data")
+        r = rospy.Rate(1)
+        while(not rospy.is_shutdown()):
+            self.initial_pose_estimate = (0, 0, 0)
+            self.prev_pose = self.initial_pose_estimate
+            self.initial_sample_points(self.initial_pose_estimate)
+            self.plot_particles()
+            r.sleep()
+
 
 if __name__ == '__main__':
     PF = ParticleFilter()
