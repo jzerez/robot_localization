@@ -3,7 +3,8 @@
 """ This is the starter code for the robot localization project """
 
 import rospy
-from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose, LaserScan, Odometry
+from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose, LaserScan, Odometry, Quaternion, Vector3
+from std_msgs.msg import ColorRBGA, Header
 from nav_msgs.msg import Odometry
 from helper_functions import TFHelper
 from occupancy_field import OccupancyField
@@ -12,6 +13,8 @@ import tf2_ros
 from tf.transformations import euler_from_quaternion
 import tf2_geometry_msgs
 import math
+from scipy.stats import norm
+from visualization_msgs.msg import Marker
 
 
 class ParticleFilter():
@@ -25,10 +28,12 @@ class ParticleFilter():
         self.tf_buffer = tf2_ros.Buffer()
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
+        self.occupancy_field = OccupancyField()
         self.particles = []
         self.number_of_particles = 1000
         self.pos_std_dev = 0.25
         self.ori_std_dev = 25 * pi / 180
+        self.lidar_std_dev = 0.05
         self.weights = []
         self.resample_threshold = 0.2
         self.scan = None
@@ -91,18 +96,16 @@ class ParticleFilter():
         for i, p in enumerate(self.particles):
             weight_sum = 0
             xs,ys = polar_to_cartesian(msg.ranges,math.radians(range(361)),p[2])
+            # Average the probability associated with each LIDAR reading
             for x, y in zip(xs,yz):
-                dist = get_closest_obstacle_distance(p[0]+x,p[1]+y)
-                # some dist to probability. Use Gaussian with STD based on sensor noise?
+                dist = self.occupancy_field.get_closest_obstacle_distance(p[0]+x,p[1]+y)
+                prob = norm(0, self.lidar_std_dev).pdf(dist) / (0.4 / self.lidar_std_dev)
                 weight_sum += prob
-            self.weights = weight_sum / 361
-
-    def calc_correspondence(self, particle):
-        # See how well the lidar scan matches up with the map for a given particle
-        pass
+            self.weights[i] = weight_sum / 361
 
     def apply_particle_transform(self):
         # Take the LIDAR points and transform them into the global frame to be interpreted relative to map data
+
         pass
 
     def polar_to_cartesian(self, rs, thetas, theta_offset):
@@ -116,3 +119,11 @@ class ParticleFilter():
             ys.append(r * math.sin(theta))
 
         return xs, ys
+
+    def main(self):
+
+        pass
+
+if __name__ == '__main__':
+    PF = ParticleFilter()
+    PF.main()
