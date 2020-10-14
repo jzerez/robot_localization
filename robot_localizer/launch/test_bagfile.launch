@@ -25,7 +25,7 @@
  </group>
 
  <group unless="$(arg use_builtin)">
-  <node name="pf" pkg="robot_localizer" type="pf.py" output="screen">
+  <node name="ParticleFilter" pkg="robot_localizer" type="main.py" output="screen">
     <remap from="scan" to="$(arg scan_topic)"/>
   </node>
 </group>

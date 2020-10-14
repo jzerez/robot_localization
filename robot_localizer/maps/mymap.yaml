@@ -1,7 +1,6 @@
-image: /home/nestill/mymap.pgm
+image: ./mymap.pgm
 resolution: 0.020000
-origin: [-30.600000, -5.000000, 0.000000]
+origin: [-12, -20, 0]
 negate: 0
 occupied_thresh: 0.65
 free_thresh: 0.196
-

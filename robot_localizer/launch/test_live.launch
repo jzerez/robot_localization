@@ -3,9 +3,9 @@
   <arg name="use_builtin" default="false"/>
   <arg name="map_file"/>
   <node name="rviz" pkg="rviz" type="rviz" args="-d $(find neato_2dnav)/rviz/pf_live.rviz"/>
- 
-  <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)"/> 
- 
+
+  <node name="map_server" pkg="map_server" type="map_server" args="$(arg map_file)"/>
+
  <!-- Localization node
 
 	This launch file either uses the built in particle filter AMCL or the
@@ -22,7 +22,7 @@
  </group>
 
  <group unless="$(arg use_builtin)">
-  <node name="pf" pkg="robot_localizer" type="pf.py" output="screen">
+  <node name="ParticleFilter" pkg="robot_localizer" type="main.py" output="screen">
     <remap from="scan" to="$(arg scan_topic)"/>
   </node>
 </group>

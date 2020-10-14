@@ -22,10 +22,11 @@ class ParticleFilter():
 
     def __init__(self):
         #
-        rospy.init_node("lol")
+        rospy.init_node("ParticleFilter")
         self.lidar_sub = rospy.Subscriber("/scan",LaserScan, self.lidar_callback)
         self.odom_sub = rospy.Subscriber("/odom",Odometry, self.odom_callback)
-        self.marker_pub = rospy.Publisher("/visualization", MarkerArray, queue_size=10)
+        self.all_particles_pub = rospy.Publisher("/visualization_particles", MarkerArray, queue_size=10)
+        self.init_particles_pub = rospy.Publisher("/visualization_init",MarkerArray,queue_size=10)
 
         # reference frame transform tools
         # self.tf_buffer = tf2_ros.Buffer()
@@ -90,8 +91,8 @@ class ParticleFilter():
         y = msg.pose.pose.position.y
         t = euler_from_quaternion([msg.pose.pose.orientation.w,msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,msg.pose.pose.orientation.z])[0]
         pose = (x,y,t)
-        self.delta_pose = tuple([i - j for i, j in zip(pose, self.prev_pose)])
-        self.prev_pose = pose
+        # self.delta_pose = tuple([i - j for i, j in zip(pose, self.prev_pose)])
+        # self.prev_pose = pose
 
 
     def calc_prob(self):
@@ -124,7 +125,7 @@ class ParticleFilter():
 
         return xs, ys
 
-    def plot_particles(self):
+    def plot_particles(self, color, pub):
         marker_array = MarkerArray()
         for i, particle in enumerate(self.particles):
             nextMarker = Marker()
@@ -135,24 +136,30 @@ class ParticleFilter():
             nextMarker.id = i;
             nextMarker.ns="particle"
             nextMarker.type = Marker.ARROW
-            nextMarker.points = [Point(x,y,0), Point(math.sin(t), math.cos(t), 0)]
+            nextMarker.points = [Point(x,y,0), Point(x+math.cos(t), y+math.sin(t), 0)]
             # nextMarker.pose = Pose(Point(x,y,0), Quaternion(0,0,0,0))
             nextMarker.scale = Vector3(0.1,0.3,0.2)
-            nextMarker.color = ColorRGBA(0, 1, 0.5, 0.5)
+            nextMarker.color = color
             nextMarker.action = Marker.ADD
             marker_array.markers.append(nextMarker)
-        self.marker_pub.publish(marker_array)
+        pub.publish(marker_array)
 
     def main(self):
         # while(not rospy.is_shutdown() and (self.scan == None or self.delta_pose == None)):
         #     rospy.loginfo("Waiting for Data")
         r = rospy.Rate(1)
+        self.delta_pose = (4,4,1.5)
         while(not rospy.is_shutdown()):
             self.initial_pose_estimate = (0, 0, 0)
             self.prev_pose = self.initial_pose_estimate
             self.initial_sample_points(self.initial_pose_estimate)
-            self.plot_particles()
+            self.plot_particles(ColorRGBA(0, 1, 0.5, 0.5), self.init_particles_pub)
             r.sleep()
+            self.particles = [self.apply_odom_transform(p) for p in self.particles]
+            self.plot_particles(ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
+
+            r.sleep()
+            # self.delta_pose = (0,0,0)
 
 
 if __name__ == '__main__':
