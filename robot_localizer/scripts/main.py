@@ -16,6 +16,7 @@ import tf2_geometry_msgs
 import math
 from scipy.stats import norm
 from visualization_msgs.msg import Marker, MarkerArray
+import pdb
 
 
 class ParticleFilter():
@@ -91,8 +92,8 @@ class ParticleFilter():
         y = msg.pose.pose.position.y
         t = euler_from_quaternion([msg.pose.pose.orientation.w,msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,msg.pose.pose.orientation.z])[0]
         pose = (x,y,t)
-        # self.delta_pose = tuple([i - j for i, j in zip(pose, self.prev_pose)])
-        # self.prev_pose = pose
+        self.delta_pose = tuple([i - j for i, j in zip(pose, self.prev_pose)])
+        self.prev_pose = pose
 
 
     def calc_prob(self):
@@ -100,7 +101,11 @@ class ParticleFilter():
 
         for i, p in enumerate(self.particles):
             weight_sum = 0
-            xs,ys = polar_to_cartesian(msg.ranges,math.radians(range(361)),p[2])
+            xs,ys = polar_to_cartesian(self.scan, math.radians(range(361)),p[2])
+            lidar_points = zip(xs, ys, [0]*len(xs))
+
+            self.plot_particles(lidar_points, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
+            pdb.set_trace()
             # Average the probability associated with each LIDAR reading
             for x, y in zip(xs,yz):
                 dist = self.occupancy_field.get_closest_obstacle_distance(p[0]+x,p[1]+y)
@@ -125,9 +130,9 @@ class ParticleFilter():
 
         return xs, ys
 
-    def plot_particles(self, color, pub):
+    def plot_particles(self, particles, color, pub):
         marker_array = MarkerArray()
-        for i, particle in enumerate(self.particles):
+        for i, particle in enumerate(particles):
             nextMarker = Marker()
             x = particle[0]
             y = particle[1]
@@ -147,16 +152,20 @@ class ParticleFilter():
     def main(self):
         # while(not rospy.is_shutdown() and (self.scan == None or self.delta_pose == None)):
         #     rospy.loginfo("Waiting for Data")
+        # TODO: Get initial pose estimate from RVIZ
+        self.number_of_particles = 5
+        self.initial_pose_estimate = (0, 0, 0)
+        self.prev_pose = self.initial_pose_estimate
+
+        self.initial_sample_points(self.initial_pose_estimate)
+
         r = rospy.Rate(1)
         self.delta_pose = (4,4,1.5)
         while(not rospy.is_shutdown()):
-            self.initial_pose_estimate = (0, 0, 0)
-            self.prev_pose = self.initial_pose_estimate
-            self.initial_sample_points(self.initial_pose_estimate)
-            self.plot_particles(ColorRGBA(0, 1, 0.5, 0.5), self.init_particles_pub)
-            r.sleep()
+            self.plot_particles(self.particles, ColorRGBA(0, 1, 0.5, 0.5), self.init_particles_pub)
             self.particles = [self.apply_odom_transform(p) for p in self.particles]
-            self.plot_particles(ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
+            self.plot_particles(self.particles, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
+            self.calc_prob()
 
             r.sleep()
             # self.delta_pose = (0,0,0)

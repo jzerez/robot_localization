@@ -1,0 +1,1 @@
+roslaunch robot_localizer test_bagfile.launch map_name:=ac109_1 use_builtin:=true
