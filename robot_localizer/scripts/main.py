@@ -17,6 +17,7 @@ import math
 from scipy.stats import norm
 from visualization_msgs.msg import Marker, MarkerArray
 import pdb
+import numpy as np
 
 
 class ParticleFilter():
@@ -33,8 +34,7 @@ class ParticleFilter():
         # self.tf_buffer = tf2_ros.Buffer()
         # self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
-        # self.occupancy_field = OccupancyField()
-        self.occupancy_field = None
+        self.occupancy_field = OccupancyField()
         self.particles = []
         self.number_of_particles = 10
         self.pos_std_dev = 0.25
@@ -45,6 +45,10 @@ class ParticleFilter():
         self.scan = None
         self.prev_pose = None
         self.delta_pose = None
+        self.initial_pose_estimate = (0, 0, 0)
+        self.prev_pose = self.initial_pose_estimate
+
+        rospy.loginfo(self.prev_pose)
 
     def initial_sample_points(self, initial_pose_estimate):
         # samples a uniform distribution of points
@@ -72,14 +76,23 @@ class ParticleFilter():
             self.particles[i] = self.particles[random.choices(particles_to_keep,weights=weights_to_keep)]
 
 
-    def apply_odom_transform(self, particle):
+    def apply_odom_transform(self):
         # Takes rotation and translation from odom and transforms the particles accordingly. Also adds a bit of noise
+        self.delta_pose = tuple([i - j for i, j in zip(self.pose, self.prev_pose)])
 
-        t = particle[2] + self.delta_pose[2]
+        for i, particle in enumerate(self.particles):
+
+            if self.delta_pose[0] == 0 and self.delta_pose[1] == 0:
+                rospy.logdebug('POSE DID NOT CHANGE')
+            t = particle[2] + self.delta_pose[2]
+            self.particles[i] = (particle[0] + self.delta_pose[0], particle[1] + self.delta_pose[1], t)
+
         # delta_x = math.cos(t * math.pi / 180) * self.delta_pose[0]
         # delta_y = math.sin(t * math.pi / 180) * self.delta_pose[1]
 
-        return (particle[0] + self.delta_pose[0], particle[1] + self.delta_pose[1], t)
+        self.prev_pose = self.pose
+
+
 
 
 
@@ -88,12 +101,15 @@ class ParticleFilter():
         self.scan = msg.ranges;
 
     def odom_callback(self,msg):
+        if not self.prev_pose:
+            return
+
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         t = euler_from_quaternion([msg.pose.pose.orientation.w,msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,msg.pose.pose.orientation.z])[0]
-        pose = (x,y,t)
-        self.delta_pose = tuple([i - j for i, j in zip(pose, self.prev_pose)])
-        self.prev_pose = pose
+        self.pose = (-x,-y,-t)
+
+        self.plot_particles([self.pose], ColorRGBA(1, 1, 1, 0.5), self.init_particles_pub)
 
 
     def calc_prob(self):
@@ -101,13 +117,12 @@ class ParticleFilter():
 
         for i, p in enumerate(self.particles):
             weight_sum = 0
-            xs,ys = polar_to_cartesian(self.scan, math.radians(range(361)),p[2])
-            lidar_points = zip(xs, ys, [0]*len(xs))
+            xs,ys = self.polar_to_cartesian(self.scan, np.radians(range(361)),p[2])
+            lidar_points = [(x + p[0], y + p[1], 0) for x,y in zip(xs, ys)]
 
-            self.plot_particles(lidar_points, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
-            pdb.set_trace()
+            # self.plot_particles(lidar_points, ColorRGBA(1, 1, 1, 0.5), self.init_particles_pub)
             # Average the probability associated with each LIDAR reading
-            for x, y in zip(xs,yz):
+            for x, y in zip(xs,ys):
                 dist = self.occupancy_field.get_closest_obstacle_distance(p[0]+x,p[1]+y)
                 prob = norm(0, self.lidar_std_dev).pdf(dist) / (0.4 / self.lidar_std_dev)
                 weight_sum += prob
@@ -137,7 +152,7 @@ class ParticleFilter():
             x = particle[0]
             y = particle[1]
             t = particle[2]
-            nextMarker.header = Header(stamp = rospy.Time.now(), frame_id="base_link")
+            nextMarker.header = Header(stamp = rospy.Time.now(), frame_id="map")
             nextMarker.id = i;
             nextMarker.ns="particle"
             nextMarker.type = Marker.ARROW
@@ -150,23 +165,21 @@ class ParticleFilter():
         pub.publish(marker_array)
 
     def main(self):
-        # while(not rospy.is_shutdown() and (self.scan == None or self.delta_pose == None)):
-        #     rospy.loginfo("Waiting for Data")
-        # TODO: Get initial pose estimate from RVIZ
+        while(not rospy.is_shutdown() and self.scan == None):
+            ranhehonoh = 0
         self.number_of_particles = 5
-        self.initial_pose_estimate = (0, 0, 0)
-        self.prev_pose = self.initial_pose_estimate
 
+        # TODO: get inital pose estimate from RVIZ
         self.initial_sample_points(self.initial_pose_estimate)
 
         r = rospy.Rate(1)
         self.delta_pose = (4,4,1.5)
+
         while(not rospy.is_shutdown()):
             self.plot_particles(self.particles, ColorRGBA(0, 1, 0.5, 0.5), self.init_particles_pub)
-            self.particles = [self.apply_odom_transform(p) for p in self.particles]
             self.plot_particles(self.particles, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
             self.calc_prob()
-
+            self.apply_odom_transform()
             r.sleep()
             # self.delta_pose = (0,0,0)
 
