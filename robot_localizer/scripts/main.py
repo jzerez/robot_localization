@@ -82,7 +82,7 @@ class ParticleFilter():
 
         for i, particle in enumerate(self.particles):
 
-            noise = [1+random.normalvariate(0, 0.7) for i in range(3)]
+            noise = [1+random.normalvariate(0, i) for i in [1.5,1.5,0.7]]
             if self.delta_pose[0] == 0 and self.delta_pose[1] == 0:
                 rospy.logdebug('POSE DID NOT CHANGE')
             x = particle[0] + self.delta_pose[0] * noise[0]
@@ -155,8 +155,8 @@ class ParticleFilter():
         # translation = Point(pose[0], pose[1], 0)
         # q = quaternion_from_euler(0, 0, pose[2])
         # rotation = Quaternion(q[0], q[1], q[2], q[3])
-        br.sendTransform((-pose[0], -pose[1], 0),
-                          quaternion_from_euler(0, 0, pose[2]),
+        br.sendTransform((pose[0], pose[1], 0),
+                          quaternion_from_euler(0, 0, -pose[2]),
                           rospy.get_rostime(),
                           'map',
                           'base_laser_link')
@@ -209,11 +209,9 @@ class ParticleFilter():
             max_weight = max(self.weights)
             best_pose = self.particles[self.weights.index(max_weight)]
             self.update_transform(best_pose)
-
-            rospy.loginfo("before calc prob")
             if counter % 20 == 0:
+                rospy.loginfo("Calculating Probability")
                 self.calc_prob()
-                rospy.loginfo("before sample points")
                 self.sample_points()
 
             counter += 1
