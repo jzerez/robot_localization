@@ -3,7 +3,7 @@
 """ This is the starter code for the robot localization project """
 
 import rospy
-from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose, Quaternion, Vector3, Point
+from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose, Quaternion, Vector3, Point, TransformStamped
 from sensor_msgs.msg import LaserScan
 from std_msgs.msg import ColorRGBA, Header
 from nav_msgs.msg import Odometry
@@ -11,8 +11,8 @@ from helper_functions import TFHelper
 from occupancy_field import OccupancyField
 import random
 import tf2_ros
-from tf.transformations import euler_from_quaternion
 import tf2_geometry_msgs
+from tf.transformations import euler_from_quaternion, quaternion_from_euler
 import math
 from scipy.stats import norm
 from visualization_msgs.msg import Marker, MarkerArray
@@ -27,12 +27,9 @@ class ParticleFilter():
         rospy.init_node("ParticleFilter")
         self.lidar_sub = rospy.Subscriber("/scan",LaserScan, self.lidar_callback)
         self.odom_sub = rospy.Subscriber("/odom",Odometry, self.odom_callback)
+        self.initial_pose_sub = rospy.Subscriber("/initialpose", PoseWithCovarianceStamped, self.initial_pose_callback)
         self.all_particles_pub = rospy.Publisher("/visualization_particles", MarkerArray, queue_size=10)
         self.init_particles_pub = rospy.Publisher("/visualization_init",MarkerArray,queue_size=10)
-
-        # reference frame transform tools
-        # self.tf_buffer = tf2_ros.Buffer()
-        # self.tf_listener = tf2_ros.TransformListener(self.tf_buffer)
 
         self.occupancy_field = OccupancyField()
         self.particles = []
@@ -87,14 +84,7 @@ class ParticleFilter():
             t = particle[2] + self.delta_pose[2]
             self.particles[i] = (particle[0] + self.delta_pose[0], particle[1] + self.delta_pose[1], t)
 
-        # delta_x = math.cos(t * math.pi / 180) * self.delta_pose[0]
-        # delta_y = math.sin(t * math.pi / 180) * self.delta_pose[1]
-
         self.prev_pose = self.pose
-
-
-
-
 
     def lidar_callback(self,msg):
         # Lidar Subscriber callback function.
@@ -110,6 +100,12 @@ class ParticleFilter():
         self.pose = (-x,-y,-t)
 
         self.plot_particles([self.pose], ColorRGBA(1, 1, 1, 0.5), self.init_particles_pub)
+
+    def initial_pose_callback(self, msg):
+        pos = msg.pose.pose.position
+        ori = msg.pose.pose.orientation
+        theta = euler_from_quaternion([ori.w, ori.x, ori.y, ori.z])[0]
+        self.initial_pose_estimate = (pos.x, pos.y, theta)
 
 
     def calc_prob(self):
@@ -128,10 +124,24 @@ class ParticleFilter():
                 weight_sum += prob
             self.weights[i] = weight_sum / 361
 
-    def apply_particle_transform(self):
-        # Take the LIDAR points and transform them into the global frame to be interpreted relative to map data
+    def update_transform(self, pose):
+        # Updates the transform between the map frame and the odom frame
+        br = tf2_ros.TransformBroadcaster()
+        t = geometry_msgs.msg.TransformStamped()
 
-        pass
+        t.header.stamp = rospy.Time.now()
+        t.header.frame_id = "map"
+        t.child_frame_id = "odom"
+        t.transform.translation.x = pose[0]
+        t.transform.translation.y = pose[1]
+        t.transform.translation.z = 0
+        q = quaternion_from_euler(0, 0, pose[2])
+        t.transform.rotation.x = q[0]
+        t.transform.rotation.y = q[1]
+        t.transform.rotation.z = q[2]
+        t.transform.rotation.w = q[3]
+        br.sendTransform(t)
+
 
     def polar_to_cartesian(self, rs, thetas, theta_offset):
         # read the function name ok
