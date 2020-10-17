@@ -29,6 +29,7 @@ class ParticleFilter():
         self.odom_sub = rospy.Subscriber("/odom",Odometry, self.odom_callback)
         self.all_particles_pub = rospy.Publisher("/visualization_particles", MarkerArray, queue_size=10)
         self.init_particles_pub = rospy.Publisher("/visualization_init",MarkerArray,queue_size=10)
+        self.initial_estimate_sub = rospy.Subscriber("/initialpose",PoseWithCovarianceStamped,self.pose_estimate_callback)
 
         # reference frame transform tools
         # self.tf_buffer = tf2_ros.Buffer()
@@ -36,7 +37,7 @@ class ParticleFilter():
 
         self.occupancy_field = OccupancyField()
         self.particles = []
-        self.number_of_particles = 10
+        self.number_of_particles = 20
         self.pos_std_dev = 0.25
         self.ori_std_dev = 25 * math.pi / 180
         self.lidar_std_dev = 0.05
@@ -45,10 +46,10 @@ class ParticleFilter():
         self.scan = None
         self.prev_pose = None
         self.delta_pose = None
-        self.initial_pose_estimate = (0, 0, 0)
-        self.prev_pose = self.initial_pose_estimate
+        self.initial_pose_estimate = None
+        self.pose = None
 
-        rospy.loginfo(self.prev_pose)
+        rospy.loginfo("Initialized")
 
     def initial_sample_points(self, initial_pose_estimate):
         # samples a uniform distribution of points
@@ -60,7 +61,7 @@ class ParticleFilter():
             self.weights.append(1)
 
 
-    def sample_points(self, weights):
+    def sample_points(self):
         # Takes the weights of each particle and resamples them according to that weight
         particles_to_resample = []
         particles_to_keep = []
@@ -71,9 +72,10 @@ class ParticleFilter():
             else:
                 particles_to_keep.append(i)
                 weights_to_keep.append(self.weights[i])
-
+        if(len(weights_to_keep) == 0):
+            rospy.loginfo("No weights")
         for i in particles_to_resample:
-            self.particles[i] = self.particles[random.choices(particles_to_keep,weights=weights_to_keep)]
+            self.particles[i] = self.particles[random.choices(particles_to_keep,weights=weights_to_keep)[0]]
 
 
     def apply_odom_transform(self):
@@ -92,25 +94,26 @@ class ParticleFilter():
 
         self.prev_pose = self.pose
 
-
-
-
-
     def lidar_callback(self,msg):
         # Lidar Subscriber callback function.
         self.scan = msg.ranges;
 
     def odom_callback(self,msg):
-        if not self.prev_pose:
-            return
-
         x = msg.pose.pose.position.x
         y = msg.pose.pose.position.y
         t = euler_from_quaternion([msg.pose.pose.orientation.w,msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,msg.pose.pose.orientation.z])[0]
-        self.pose = (-x,-y,-t)
+        if self.prev_pose == None:
+            self.prev_pose = (-x,-y,-t)
+        else:
+            self.pose = (-x,-y,-t)
 
-        self.plot_particles([self.pose], ColorRGBA(1, 1, 1, 0.5), self.init_particles_pub)
+        #self.plot_particles([self.pose], ColorRGBA(1, 1, 1, 0.5), self.init_particles_pub)
 
+    def pose_estimate_callback(self,msg):
+        rospy.logdebug("Callback Good")
+        position = msg.pose.pose.position
+        orientation = euler_from_quaternion([msg.pose.pose.orientation.w,msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,msg.pose.pose.orientation.z])[0]
+        self.initial_pose_estimate = (position.x,position.y,orientation - math.pi)
 
     def calc_prob(self):
         # Reweight particles based on compatibility with laser scan
@@ -165,20 +168,25 @@ class ParticleFilter():
         pub.publish(marker_array)
 
     def main(self):
-        while(not rospy.is_shutdown() and self.scan == None):
-            ranhehonoh = 0
-        self.number_of_particles = 5
+        r = rospy.Rate(1)
+        while(not rospy.is_shutdown() and (self.scan == None or self.initial_pose_estimate == None or self.pose == None)):
+            rospy.logwarn("Still Missing Something")
+            r.sleep()
+
 
         # TODO: get inital pose estimate from RVIZ
         self.initial_sample_points(self.initial_pose_estimate)
 
-        r = rospy.Rate(1)
         self.delta_pose = (4,4,1.5)
 
         while(not rospy.is_shutdown()):
             self.plot_particles(self.particles, ColorRGBA(0, 1, 0.5, 0.5), self.init_particles_pub)
             self.plot_particles(self.particles, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
+            rospy.loginfo("before calc prob")
             self.calc_prob()
+            rospy.loginfo("before sample points")
+            self.sample_points()
+            rospy.loginfo("before apply odom transform")
             self.apply_odom_transform()
             r.sleep()
             # self.delta_pose = (0,0,0)
