@@ -79,18 +79,19 @@ class ParticleFilter():
     def apply_odom_transform(self):
         # Takes rotation and translation from odom and transforms the particles accordingly. Also adds a bit of noise
         self.delta_pose = tuple([i - j for i, j in zip(self.pose, self.prev_pose)])
+        if(abs(self.delta_pose[2]) < 0.5):
+            for i, particle in enumerate(self.particles):
 
-        for i, particle in enumerate(self.particles):
+                noise = [1+random.normalvariate(0, i) for i in [1.2,1.2,0.7]]
+                if self.delta_pose[0] == 0 and self.delta_pose[1] == 0:
+                    rospy.logdebug('POSE DID NOT CHANGE')
+                x = particle[0] + self.delta_pose[0] * noise[0]
+                y = particle[1] + self.delta_pose[1] * noise[1]
+                t = particle[2] + self.delta_pose[2] * noise[2]
 
-            noise = [1+random.normalvariate(0, i) for i in [1.5,1.5,0.7]]
-            if self.delta_pose[0] == 0 and self.delta_pose[1] == 0:
-                rospy.logdebug('POSE DID NOT CHANGE')
-            x = particle[0] + self.delta_pose[0] * noise[0]
-            y = particle[1] + self.delta_pose[1] * noise[1]
-            t = particle[2] + self.delta_pose[2] * noise[2]
-
-            self.particles[i] = (x, y, t)
-
+                self.particles[i] = (x, y, t)
+        else:
+            rospy.logwarn("Spiked Outliers")
         self.prev_pose = self.pose
 
     def lidar_callback(self,msg):
@@ -110,56 +111,46 @@ class ParticleFilter():
         self.apply_odom_transform()
         # self.plot_particles(self.particles, ColorRGBA(0, 1, 0.5, 0.5), self.init_particles_pub)
         self.plot_particles(self.particles, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
+        max_weight = max(self.weights)
+        best_pose = self.particles[self.weights.index(max_weight)]
+
+
+        self.update_transform(best_pose)
+
 
     def pose_estimate_callback(self,msg):
         rospy.logdebug("Callback Good")
         position = msg.pose.pose.position
-        orientation = euler_from_quaternion([msg.pose.pose.orientation.w,msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,msg.pose.pose.orientation.z])[0]
-        self.initial_pose_estimate = (position.x,position.y,orientation - math.pi)
+        orientation = -euler_from_quaternion([msg.pose.pose.orientation.w,msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,msg.pose.pose.orientation.z])[0] + math.pi
+        self.initial_pose_estimate = (position.x,position.y,orientation)
 
     def calc_prob(self):
         # Reweight particles based on compatibility with laser scan
+        scan = self.scan
+        particles = self.particles
 
-        for i, p in enumerate(self.particles):
+        for i, p in enumerate(particles):
             weight_sum = 0
-            xs,ys = self.polar_to_cartesian(self.scan, np.radians(range(361)),p[2])
+            xs,ys = self.polar_to_cartesian(scan, np.radians(range(361)),p[2])
             lidar_points = [(x + p[0], y + p[1], 0) for x,y in zip(xs, ys)]
 
             # self.plot_particles(lidar_points, ColorRGBA(1, 1, 1, 0.5), self.init_particles_pub)
             # Average the probability associated with each LIDAR reading
-            for x, y in zip(xs,ys):
+            for x, y in zip(xs[::2],ys[::2]):
                 dist = self.occupancy_field.get_closest_obstacle_distance(p[0]+x,p[1]+y)
-                prob = norm(0, self.lidar_std_dev).pdf(dist) / (0.4 / self.lidar_std_dev)
+                prob = norm(0, self.lidar_std_dev**2).pdf(dist**2) / (0.4 / self.lidar_std_dev**2)
                 weight_sum += prob
             self.weights[i] = weight_sum / 361
 
-    def update_transform(self, pose):
+    def update_transform(self, pose, target_frame='base_laser_link'):
         # Updates the transform between the map frame and the odom frame
-        # br = tf2_ros.TransformBroadcaster()
-        # t = geometry_msgs.msg.TransformStamped()
-        #
-        # t.header.stamp = rospy.Time.now()
-        # t.header.frame_id = "map"
-        # t.child_frame_id = "base_laser_link"
-        # t.transform.translation.x = pose[0]
-        # t.transform.translation.y = pose[1]
-        # t.transform.translation.z = 0
-        # q = quaternion_from_euler(0, 0, pose[2])
-        # t.transform.rotation.x = q[0]
-        # t.transform.rotation.y = q[1]
-        # t.transform.rotation.z = q[2]
-        # t.transform.rotation.w = q[3]
-        # br.sendTransform(t)
-
         br = TransformBroadcaster()
-        # translation = Point(pose[0], pose[1], 0)
-        # q = quaternion_from_euler(0, 0, pose[2])
-        # rotation = Quaternion(q[0], q[1], q[2], q[3])
         br.sendTransform((pose[0], pose[1], 0),
-                          quaternion_from_euler(0, 0, -pose[2]),
+                          quaternion_from_euler(0, 0, pose[2]+math.pi),
                           rospy.get_rostime(),
-                          'map',
-                          'base_laser_link')
+                          target_frame,
+                          'map')
+
 
 
     def polar_to_cartesian(self, rs, thetas, theta_offset):
@@ -177,6 +168,7 @@ class ParticleFilter():
     def plot_particles(self, particles, color, pub):
         marker_array = MarkerArray()
         for i, particle in enumerate(particles):
+            w = self.weights[i] * 10
             nextMarker = Marker()
             x = particle[0]
             y = particle[1]
@@ -185,9 +177,9 @@ class ParticleFilter():
             nextMarker.id = i;
             nextMarker.ns="particle"
             nextMarker.type = Marker.ARROW
-            nextMarker.points = [Point(x,y,0), Point(x+math.cos(t), y+math.sin(t), 0)]
+            nextMarker.points = [Point(x,y,0), Point(x+math.cos(t)*w, y+math.sin(t)*w, 0)]
             # nextMarker.pose = Pose(Point(x,y,0), Quaternion(0,0,0,0))
-            nextMarker.scale = Vector3(0.1,0.3,0.2)
+            nextMarker.scale = Vector3(0.1,0.2,0.1)
             nextMarker.color = color
             nextMarker.action = Marker.ADD
             marker_array.markers.append(nextMarker)
@@ -206,12 +198,12 @@ class ParticleFilter():
         counter = 0
         while(not rospy.is_shutdown()):
 
-            max_weight = max(self.weights)
-            best_pose = self.particles[self.weights.index(max_weight)]
-            self.update_transform(best_pose)
-            if counter % 20 == 0:
+            if counter % 2 == 0:
                 rospy.loginfo("Calculating Probability")
                 self.calc_prob()
+                max_weight = max(self.weights)
+                best_pose = self.particles[self.weights.index(max_weight)]
+                self.update_transform(best_pose,'odom')
                 self.sample_points()
 
             counter += 1
