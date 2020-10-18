@@ -33,14 +33,15 @@ class ParticleFilter():
         self.initial_estimate_sub = rospy.Subscriber("/initialpose",PoseWithCovarianceStamped,self.pose_estimate_callback)
 
         self.occupancy_field = OccupancyField()
-        self.number_of_particles = 20
+        self.number_of_particles = 30
         self.particles = np.ones([3,self.number_of_particles], dtype=np.float)
         self.weights = np.ones(self.number_of_particles, dtype=np.float)
         pos_std_dev = 0.25
         ori_std_dev = 25 * math.pi / 180
         self.initial_std_dev = np.array([[pos_std_dev, pos_std_dev, ori_std_dev]]).T
-
-        self.lidar_std_dev = 0.05
+        self.odom_tf_time = 0
+        self.base_tf_time = 0
+        self.lidar_std_dev = 0.02
         self.resample_threshold = 0.1
         self.scan = None
         self.prev_pose = None
@@ -59,6 +60,7 @@ class ParticleFilter():
         # Takes the weights of each particle and resamples them according to that weight
         replace = self.weights < self.resample_threshold
         kept_weights = self.weights[~replace]
+        kept_inds = np.arange(kept_weights.size)[~replace]
         probs = kept_weights / sum(kept_weights)
         replace_inds = np.arange(self.weights.size)[replace]
 
@@ -102,15 +104,17 @@ class ParticleFilter():
         self.apply_odom_transform()
         self.plot_particles(self.particles, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
 
-        max_weight_ind = np.argmax(self.weights)
-        best_pose = self.particles[:, max_weight_ind]
-        self.update_transform(best_pose)
+        avg_pose = self.calc_avg_particle()
+        self.update_transform(avg_pose)
+        # self.update_transform(avg_pose, target_frame='odom')
 
     def pose_estimate_callback(self,msg):
         rospy.logdebug("Callback Good")
         position = msg.pose.pose.position
+                # best_pose = self.particles[:, max_weight_ind]
+                # self.update_transform(best_pose,'odom')
         orientation = euler_from_quaternion([msg.pose.pose.orientation.w,msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,msg.pose.pose.orientation.z])[0]
-        pose = [position.x,position.y,orientation - math.pi]
+        pose = [position.x,position.y,-orientation - math.pi]
         self.initial_pose_estimate = np.array([pose]).T
 
     def calc_prob(self):
@@ -127,17 +131,22 @@ class ParticleFilter():
             for x, y in zip(lidar_x[::2],lidar_y[::2]):
                 dist = self.occupancy_field.get_closest_obstacle_distance(x,y)
                 prob = norm(0, self.lidar_std_dev).pdf(dist) / (0.4 / self.lidar_std_dev)
-                weight_sum += prob**3.3
+                weight_sum += prob**3
             self.weights[i] = weight_sum / 361
 
     def update_transform(self, pose, target_frame='base_laser_link'):
         # Updates the transform between the map frame and the odom frame
         br = TransformBroadcaster()
-        br.sendTransform((pose[0], pose[1], 0),
-                          quaternion_from_euler(0, 0, pose[2]+math.pi),
-                          rospy.get_rostime(),
-                          target_frame,
-                          'map')
+        if((rospy.get_rostime() != self.odom_tf_time and target_frame == 'odom') or (rospy.get_rostime() != self.base_tf_time and target_frame == 'base_laser_link')):
+            br.sendTransform((pose[0], pose[1], 0),
+                              quaternion_from_euler(0,0,pose[2]+math.pi),
+                              rospy.get_rostime(),
+                              target_frame,
+                              'map')
+        if(target_frame == 'odom'):
+            self.odom_tf_time = rospy.get_rostime()
+        else:
+            self.base_tf_time = rospy.get_rostime()
 
 
     def polar_to_cartesian(self, rs, thetas, theta_offset):
@@ -170,6 +179,9 @@ class ParticleFilter():
             marker_array.markers.append(nextMarker)
         pub.publish(marker_array)
 
+    def calc_avg_particle(self):
+        return np.sum(self.particles * self.weights, axis=1) / sum(self.weights)
+
     def main(self):
         r = rospy.Rate(5)
 
@@ -183,9 +195,9 @@ class ParticleFilter():
             if counter % 2 == 0:
                 rospy.loginfo("Calculating Probability")
                 self.calc_prob()
-                max_weight_ind = np.argmax(self.weights)
-                best_pose = self.particles[:, max_weight_ind]
-                self.update_transform(best_pose,'odom')
+                # max_weight_ind = np.argmax(self.weights)
+                # best_pose = self.particles[:, max_weight_ind]
+                # self.update_transform(best_pose,'odom')
                 self.resample_points()
 
             counter += 1
