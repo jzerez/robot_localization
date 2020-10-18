@@ -20,6 +20,7 @@ import pdb
 import numpy as np
 
 from tf import TransformBroadcaster
+from tf import TransformListener
 
 class ParticleFilter():
 
@@ -31,6 +32,7 @@ class ParticleFilter():
         self.all_particles_pub = rospy.Publisher("/visualization_particles", MarkerArray, queue_size=10)
         self.init_particles_pub = rospy.Publisher("/visualization_init",MarkerArray,queue_size=10)
         self.initial_estimate_sub = rospy.Subscriber("/initialpose",PoseWithCovarianceStamped,self.pose_estimate_callback)
+        self.new_particles_pub = rospy.Publisher("/particlecloud",PoseArray,queue_size=10)
 
         self.occupancy_field = OccupancyField()
         self.number_of_particles = 30
@@ -48,6 +50,8 @@ class ParticleFilter():
         self.delta_pose = None
         self.initial_pose_estimate = None
         self.pose = None
+        self.tf_listener = TransformListener()
+        self.tf_broadcaster = TransformBroadcaster()
 
         rospy.loginfo("Initialized")
 
@@ -59,8 +63,8 @@ class ParticleFilter():
     def resample_points(self):
         # Takes the weights of each particle and resamples them according to that weight
         replace = self.weights < self.resample_threshold
-        kept_weights = self.weights[~replace]
-        kept_inds = np.arange(kept_weights.size)[~replace]
+        kept_weights = np.multiply(replace,self.weights)
+        # kept_inds = np.arange(kept_weights.size)[~replace]
         probs = kept_weights / sum(kept_weights)
         replace_inds = np.arange(self.weights.size)[replace]
 
@@ -102,7 +106,8 @@ class ParticleFilter():
             self.pose = pose
 
         self.apply_odom_transform()
-        self.plot_particles(self.particles, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
+        self.plot_particles_new(self.particles)
+        # self.plot_particles(self.particles, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
 
         avg_pose = self.calc_avg_particle()
         self.update_transform(avg_pose)
@@ -136,9 +141,8 @@ class ParticleFilter():
 
     def update_transform(self, pose, target_frame='base_laser_link'):
         # Updates the transform between the map frame and the odom frame
-        br = TransformBroadcaster()
         if((rospy.get_rostime() != self.odom_tf_time and target_frame == 'odom') or (rospy.get_rostime() != self.base_tf_time and target_frame == 'base_laser_link')):
-            br.sendTransform((pose[0], pose[1], 0),
+            self.tf_broadcaster.sendTransform((pose[0], pose[1], 0),
                               quaternion_from_euler(0,0,pose[2]+math.pi),
                               rospy.get_rostime(),
                               target_frame,
@@ -178,6 +182,18 @@ class ParticleFilter():
             nextMarker.action = Marker.ADD
             marker_array.markers.append(nextMarker)
         pub.publish(marker_array)
+
+    def plot_particles_new(self,particles):
+        pose_array = PoseArray()
+        pose_array.header = Header(stamp = rospy.Time.now(),frame_id="map")
+        for i,particle in enumerate(particles.T):
+            w = self.weights[i] * 10
+            nextPose = Pose()
+            nextPose.position = Point(x=particle[0],y=particle[1],z=0)
+            nextPose.orientation = Quaternion(*quaternion_from_euler(0,0,particle[2]))
+            pose_array.poses.append(nextPose)
+        self.new_particles_pub.publish(pose_array)
+
 
     def calc_avg_particle(self):
         return np.sum(self.particles * self.weights, axis=1) / sum(self.weights)
