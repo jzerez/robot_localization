@@ -41,7 +41,7 @@ class ParticleFilter():
         self.initial_std_dev = np.array([[pos_std_dev, pos_std_dev, ori_std_dev]]).T
 
         self.lidar_std_dev = 0.05
-        self.resample_threshold = 0.1
+        self.resample_threshold = 0.2
         self.scan = None
         self.prev_pose = None
         self.delta_pose = None
@@ -53,16 +53,17 @@ class ParticleFilter():
     def sample_points(self, mean, std):
         # samples a uniform distribution of points
         stds = np.repeat(std, self.number_of_particles, 1)
-        return np.random.normal(mean, stds, [3,self.number_of_particles])
+        self.particles = np.random.normal(mean, stds,
+                                          [3,self.number_of_particles])
+
 
     def resample_points(self):
         # Takes the weights of each particle and resamples them according to that weight
-        replace = self.weights < self.resample_threshold
-        kept_weights = self.weights[~replace]
+        replace_inds = self.weights < self.resample_threshold
+        kept_weights = self.weights[~replace_idns]
         probs = kept_weights / sum(kept_weights)
-        replace_inds = np.arange(self.weights.size)[replace]
 
-        if kept_weights.size == 0:
+        if sum(replace_inds) == 0:
             rospy.logerr("No weights")
         else:
             for i in replace_inds:
@@ -74,15 +75,12 @@ class ParticleFilter():
     def apply_odom_transform(self):
         # Takes rotation and translation from odom and transforms the particles accordingly. Also adds a bit of noise
         self.delta_pose = self.pose - self.prev_pose
+        delta_std = abs(self.delta_pose) * np.transpose([[1.5, 1.5, 0.7]])
+        noisy_deltas = self.sample_points(self.delta_pose, delta_std)
+
+        self.particles += noisy_deltas
+
         self.prev_pose = self.pose
-
-        if abs(self.delta_pose[2]) < 0.5:
-            delta_std = abs(self.delta_pose) * np.transpose([[1.5, 1.5, 0.9]])
-            noisy_deltas = self.sample_points(self.delta_pose, delta_std)
-
-            self.particles = self.particles + noisy_deltas
-
-
 
     def lidar_callback(self,msg):
         # Lidar Subscriber callback function.
@@ -93,7 +91,7 @@ class ParticleFilter():
         y = msg.pose.pose.position.y
         t = euler_from_quaternion([msg.pose.pose.orientation.w,msg.pose.pose.orientation.x,msg.pose.pose.orientation.y,msg.pose.pose.orientation.z])[0]
         pose = -np.array([[x,y,t]]).T
-        if self.prev_pose is None:
+        if self.prev_pose == None:
             self.prev_pose = pose
             self.pose = pose
         else:
@@ -101,10 +99,6 @@ class ParticleFilter():
 
         self.apply_odom_transform()
         self.plot_particles(self.particles, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
-
-        max_weight_ind = np.argmax(self.weights)
-        best_pose = self.particles[:, max_weight_ind]
-        self.update_transform(best_pose)
 
     def pose_estimate_callback(self,msg):
         rospy.logdebug("Callback Good")
@@ -115,8 +109,7 @@ class ParticleFilter():
 
     def calc_prob(self):
         # Reweight particles based on compatibility with laser scan
-        scan = self.scan
-        particles = self.particles
+
         for i, p in enumerate(self.particles.T):
             weight_sum = 0
             xs,ys = self.polar_to_cartesian(self.scan, np.radians(range(361)),p[2])
@@ -124,10 +117,10 @@ class ParticleFilter():
             lidar_y = ys + p[1]
 
             # Average the probability associated with each LIDAR reading
-            for x, y in zip(lidar_x[::2],lidar_y[::2]):
+            for x, y in zip(lidar_x,lidar_y):
                 dist = self.occupancy_field.get_closest_obstacle_distance(x,y)
                 prob = norm(0, self.lidar_std_dev).pdf(dist) / (0.4 / self.lidar_std_dev)
-                weight_sum += prob**3.3
+                weight_sum += prob
             self.weights[i] = weight_sum / 361
 
     def update_transform(self, pose, target_frame='base_laser_link'):
@@ -152,8 +145,7 @@ class ParticleFilter():
 
     def plot_particles(self, particles, color, pub):
         marker_array = MarkerArray()
-        for i, particle in enumerate(particles.T):
-            w=self.weights[i] * 10
+        for i, particle in enumerate(particles):
             nextMarker = Marker()
             x = particle[0]
             y = particle[1]
@@ -162,7 +154,7 @@ class ParticleFilter():
             nextMarker.id = i;
             nextMarker.ns="particle"
             nextMarker.type = Marker.ARROW
-            nextMarker.points = [Point(x,y,0), Point(x+math.cos(t)*w, y+math.sin(t)*w, 0)]
+            nextMarker.points = [Point(x,y,0), Point(x+math.cos(t), y+math.sin(t), 0)]
             # nextMarker.pose = Pose(Point(x,y,0), Quaternion(0,0,0,0))
             nextMarker.scale = Vector3(0.1,0.3,0.2)
             nextMarker.color = color
@@ -173,19 +165,22 @@ class ParticleFilter():
     def main(self):
         r = rospy.Rate(5)
 
-        while(not rospy.is_shutdown() and (self.scan is None or self.initial_pose_estimate is None or self.pose is None)):
+        while(not rospy.is_shutdown() and (self.scan == None or self.initial_pose_estimate == None or self.pose == None)):
             rospy.logwarn("Still Missing Something")
             r.sleep()
 
-        self.particles = self.sample_points(self.initial_pose_estimate, self.initial_std_dev)
+
+        # TODO: get inital pose estimate from RVIZ
+        self.sample_points(self.initial_pose_estimate, self.initial_std_dev)
         counter = 0
         while(not rospy.is_shutdown()):
-            if counter % 2 == 0:
+
+            max_weight = max(self.weights)
+            best_pose = self.particles[self.weights.index(max_weight)]
+            self.update_transform(best_pose)
+            if counter % 20 == 0:
                 rospy.loginfo("Calculating Probability")
                 self.calc_prob()
-                max_weight_ind = np.argmax(self.weights)
-                best_pose = self.particles[:, max_weight_ind]
-                self.update_transform(best_pose,'odom')
                 self.resample_points()
 
             counter += 1
