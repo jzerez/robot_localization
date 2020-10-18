@@ -53,6 +53,8 @@ class ParticleFilter():
         self.tf_listener = TransformListener()
         self.tf_broadcaster = TransformBroadcaster()
 
+        self.transform_helper = TFHelper()
+
         rospy.loginfo("Initialized")
 
     def sample_points(self, mean, std):
@@ -109,9 +111,10 @@ class ParticleFilter():
         self.plot_particles_new(self.particles)
         # self.plot_particles(self.particles, ColorRGBA(1, 0, 0.5, 0.5), self.all_particles_pub)
 
-        avg_pose = self.calc_avg_particle()
-        self.update_transform(avg_pose)
+        # avg_pose = self.calc_avg_particle()
+        # self.update_transform(avg_pose)
         # self.update_transform(avg_pose, target_frame='odom')
+        self.transform_helper.send_last_map_to_odom_transform()
 
     def pose_estimate_callback(self,msg):
         rospy.logdebug("Callback Good")
@@ -214,6 +217,9 @@ class ParticleFilter():
                 # max_weight_ind = np.argmax(self.weights)
                 # best_pose = self.particles[:, max_weight_ind]
                 # self.update_transform(best_pose,'odom')
+                best_pose = self.calc_avg_particle()
+                robot_pose = Pose(position=Point(x=best_pose[0],y=best_pose[1]),orientation=Quaternion(*quaternion_from_euler(0,0,best_pose[2])))
+                self.transform_helper.fix_map_to_odom_transform(robot_pose,rospy.Time.now())
                 self.resample_points()
 
             counter += 1
