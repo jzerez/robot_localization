@@ -7,7 +7,7 @@ This is the base repo for the Olin Computational Robotics Robot Localization pro
 
 This project's robotic platform is the NEATO vacuum robot. The NEATO is equipped with a number of basic sensors including wheel encoders, a small array of bump sensors, and a 2D LIDAR unit. Below is an image of a NEATO. The blue circle atop the unit is the LIDAR sensor.
 
-![NEATO](./assets/NEATO.jpg)
+![NEATO](./assets/neato.jpg)
 
 ## Running the Code
 The code can be run in two ways, to run the code on a prerecorded bag file, paste the following into your command line once you've cloned the repo:
@@ -18,7 +18,7 @@ To run the particle filter with the goal of localizing the NEATO in real time, p
 
 `roslaunch robot_localizer test_live.launch map_name:=ac109_1`
 
-In both cases, the map name can be changed to any of the file names found the `/maps` directory.
+In both cases, the map name can be changed to any of the file names found in the `/maps` directory.
 
 Once the rviz window opens, simply provide a 2D pose estimation to initialize the particles, and you're good to go! Note, the initial pose estimation needs to be pretty good in order for the particle filter to work well.
 
@@ -31,7 +31,7 @@ The particle filter works by first initializing a set of particles based on the 
 
 
 ### Initializing the particles
-For our initial set of particles, we get a initial pose estimate from clicking in Rviz. We take this pose estimate and create particles that are normally distributed around this point. The particles are also normally distributed around the orientation of the initial pose estimate.
+For our initial set of particles, we get an initial pose estimate from clicking in Rviz. We take this pose estimate and create particles that are normally distributed around this point. The particles are also normally distributed around the orientation of the initial pose estimate.
 
 ![Initial Particles](./assets/InitialParticles.png)
 
@@ -39,17 +39,22 @@ For our initial set of particles, we get a initial pose estimate from clicking i
 To ensure that the particles keep up with the robots movement, we transform them based on the '/odom' topic. One major design decision we made was in how we handled this update. One path forward was to calculate the change relative to the NEATO's orientation. For example, if the NEATO moved directly forward relative to its own heading, the particles would also move directly forward relative to their own heading. The other path was to calculate the change relative to the position overall. For example, if the NEATO moves 1 meter in the x direction and 0.5 meters in the y direction, the particles would also move 1 meter in the x direction and 0.5 meters in the y direction. We ended up choosing the latter because it was much simpler to implement and the additional accuracy would not have that great of an impact because the particles are mostly facing the same direction. So for each time step, we calculate the difference between the previous odom pose and the current odom pose and apply that difference to each of our particles. Additionally, each particle also moves by a certain amount of random noise that is proportional to the amount that it moved in both translational and rotational amounts.
 
 ### Transforming the LIDAR scan to each particle's reference frame and then to the map frame
-Because the LIDAR scan is given as a distance and degree, it has to be transferred to Cartesian coordinates. It also has to be in the map's frame so that we can later compare the points to the points in the map. For each particle, we first add the particles orientation to the LIDAR's points. Then we convert the resulting polar coordinates to Cartesian, which results in a set of points localized around each particle. We then add the particle's x and y locations to get each point in the map's frame of reference.
+Because the LIDAR scan is given as a distance and angle, it has to be transferred to Cartesian coordinates. It also has to be in the map's frame so that we can later compare the points to the points in the map. For each particle, we first add the particles orientation to the angle coordinates of the LIDAR's points. Then we convert the resulting polar coordinates to Cartesian, which results in a set of points localized around each particle. We then add the particle's x and y locations to get each point in the map's frame of reference.
 
 ### Calculating the weight of each particle
-Once the LIDAR scan points are transformed into the local coordinate system for a given particle, we then move on to calculate the so called "weight" of the particle, which essentially a measure of how good of a guess a given particle is. The better a particle's position and orientation explain the LIDAR data, the higher its weight will be.
+Once the LIDAR scan points are transformed into the local coordinate system for a given particle, we then move on to calculate the so called "weight" of the particle, which is essentially a measure of how good of a guess a given particle is. The better a particle's position and orientation explain the LIDAR data, the higher its weight will be.
 
 In order to calculate the weight of a particle, we first need to implement our sensor model. In our case, we assume that the LIDAR sensor returns distance values that follow a normal distribution with a standard deviation of 2 cm from the mean. For each LIDAR point in the particle's frame, we calculate the nearest point in the map. We then assign a probability to each point by picking the corresponding probability* from our distribution function given the distance to the nearest point.
 
+![Calculate Probability](./assets/calc_weight.png)
+
+\**technically, probability isn't quite the right word to use here. A normal distribution usually is a probability density function, which requires one to integrate over a range of values in order to generate a probability. Rather, our function is simply a relative measure of the likelihood that the LIDAR returns a certain value given some actual distance between the LIDAR's origin and an obstacle. We scaled the function such that the peak of the graph is 1.00*
+
+We calculate the weight associated with every point in the LIDAR scan for each particle in the filter. We then take the cube of each weight and then take the average value. This gives us an scalar value from 0 to 1 that represents the total weight of a given particle (or how well that specific particle explains the LIDAR data observed).
 
 
 ### Resampling the particles based on weights
-After calculating the weight's of each particle, we want to remove some particles that are poor estimate's of the robot's pose, and resample them. To do this, we define a weight threshold. If a particle's weight is above the threshold, it remains unchanged, but if it's weight is less than the threshold, it's position changes to match one of the particle's whose weight was above the threshold. The higher a particle's weight, the higher chance that a poor particle will change to match that particle's position. The particles exactly match the assimilated particle, as noise is applied in the odometry transforms.
+After calculating the weight of each particle, we want to remove some particles that are poor estimate's of the robot's pose, and resample them. To do this, we define a weight threshold. If a particle's weight is above the threshold, it remains unchanged, but if it's weight is less than the threshold, it's position changes to match one of the particle's whose weight was above the threshold. The higher a particle's weight, the higher chance that a poor particle will change to match that particle's position. The particles exactly match the assimilated particle, as noise is applied in the odometry transforms.
 
 ## Design Decisions
 One design decision that we made was to make the odometry applied to the particles noisy as opposed to the resampling. We did this so that larger changes in movement would result in larger spreads of the particle. This aligns with the idea that the more the robot moves, the higher the odometry will be off from the ground truth.
@@ -57,20 +62,10 @@ One design decision that we made was to make the odometry applied to the particl
 ## Challenges
 Plotting in Rviz in such a way that conveys the information we wanted was a big challenge. Initially, we plotted Marker points for the particles, but those markers are sometimes too big. When we wanted to communicate the weights of each particle, scaled the length of each arrow by the weight. However, it gets harder to determine the exact locations when so many arrows are overlapping. I don't think we found a winning visualization aside from changing the form based on what property we wanted to single out.
 
+Another challenge we had was for the particle filter to run quickly. When we raised the number of particles to 100, it took a long time to update, so we were forced to use a lower number of particles. We later only used half of the laser scan, but it still ran somewhat slowly.
+
 ## Important Learning Takeaways
 
 Having a well established visualization method is crucial to being able to effectively debug robotics code. Seeing each of the arrows in Rviz really helped us find and remove mistakes that we had made that would have taken a lot longer if we had manually gone through and tried to find inconsistencies.
 
-## Prompt
-
-   How did you solve the problem? (Note: this doesn’t have to be super-detailed, you should try to explain what you did at a high-level so that others in the class could reasonably understand what you did).
-
-
-  Describe a design decision you had to make when working on your project and what you ultimately did (and why)? These design decisions could be particular choices for how you implemented some part of an algorithm or perhaps a decision regarding which of two external packages to use in your project.
-
-
-  What if any challenges did you face along the way?
-  What would you do to improve your project if you had more time?
-
-
-  Did you learn any interesting lessons for future robotic programming projects? These could relate to working on robotics projects in teams, working on more open-ended (and longer term) problems, or any other relevant topic.
+Another important takeaway was the value of testing as you develop code/functions. Because we tested as we went along, it allowed us to focus on one thing at a time and to not get overwhelmed.
