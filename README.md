@@ -54,7 +54,14 @@ We calculate the weight associated with every point in the LIDAR scan for each p
 
 
 ### Resampling the particles based on weights
-After calculating the weight of each particle, we want to remove some particles that are poor estimate's of the robot's pose, and resample them. To do this, we define a weight threshold. If a particle's weight is above the threshold, it remains unchanged, but if it's weight is less than the threshold, it's position changes to match one of the particle's whose weight was above the threshold. The higher a particle's weight, the higher chance that a poor particle will change to match that particle's position. The particles exactly match the assimilated particle, as noise is applied in the odometry transforms.
+After calculating the weight of each particle, we want to remove some particles that are poor estimate's of the robot's pose, and resample them. To do this, we define a weight threshold. If a particle's weight is above the threshold, it remains unchanged, but if its weight is less than the threshold, its position changes to match one of the particle's whose weight was above the threshold. The higher a particle's weight, the higher chance that a poor particle will change to match that particle's position. The particles exactly match the assimilated particle, as noise is applied in the odometry transforms.
+
+### Results
+Below is an animation of our particle filter in action. The big red arrow represents the ground truth pose of the NEATO in the map, and the cloud of red arrows represents the particles of the filter. The red points that are moving around are the NEATO's LIDAR observations placed in the average pose predicted by the particles (weighted by each particles weight).
+
+![Animation](./assets/results.gif)
+
+There are a few points in time where the average estimated position deviates quite a bit from the ground truth, but all in all, it seems to work pretty well. 
 
 ## Design Decisions
 One design decision that we made was to make the odometry applied to the particles noisy as opposed to the resampling. We did this so that larger changes in movement would result in larger spreads of the particle. This aligns with the idea that the more the robot moves, the higher the odometry will be off from the ground truth.
