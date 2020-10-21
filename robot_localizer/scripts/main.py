@@ -5,7 +5,7 @@
 import rospy
 from geometry_msgs.msg import PoseWithCovarianceStamped, PoseArray, Pose, Quaternion, Vector3, Point, TransformStamped
 from sensor_msgs.msg import LaserScan
-from std_msgs.msg import ColorRGBA, Header
+from std_msgs.msg import ColorRGBA, Header, Float32MultiArray
 from nav_msgs.msg import Odometry
 from helper_functions import TFHelper
 from occupancy_field import OccupancyField
@@ -27,11 +27,6 @@ class ParticleFilter():
     def __init__(self):
         # Initialize node and attributes
         rospy.init_node("ParticleFilter")
-
-        # Subscribers
-        self.lidar_sub = rospy.Subscriber("/scan",LaserScan, self.lidar_callback)
-        self.odom_sub = rospy.Subscriber("/odom",Odometry, self.odom_callback)
-        self.initial_estimate_sub = rospy.Subscriber("/initialpose",PoseWithCovarianceStamped,self.pose_estimate_callback)
 
         # publishers
         self.all_particles_pub = rospy.Publisher("/visualization_particles", MarkerArray, queue_size=10)
@@ -62,6 +57,11 @@ class ParticleFilter():
         self.tf_listener = TransformListener()
         self.tf_broadcaster = TransformBroadcaster()
         self.transform_helper = TFHelper()
+
+        # Subscribers
+        self.lidar_sub = rospy.Subscriber("/scan",LaserScan, self.lidar_callback)
+        self.odom_sub = rospy.Subscriber("/odom",Odometry, self.odom_callback)
+        self.initial_estimate_sub = rospy.Subscriber("/initialpose",PoseWithCovarianceStamped,self.pose_estimate_callback)
 
         rospy.loginfo("Initialized")
 
@@ -116,11 +116,26 @@ class ParticleFilter():
         self.delta_pose = self.pose - self.prev_pose
         self.prev_pose = self.pose
 
-        if abs(self.delta_pose[2]) < 0.5: # this was added to get rid of the orientation wrap around effect
-            delta_std = abs(self.delta_pose) * np.transpose([[1.5, 1.5, 0.9]])
-            noisy_deltas = self.sample_points(self.delta_pose, delta_std)
 
-            self.particles = self.particles + noisy_deltas
+        if abs(self.delta_pose[2]) > 0.5: # this was added to get rid of the orientation wrap around effect
+            return
+
+        if np.linalg.norm(self.delta_pose) == 0:
+            return
+
+        for i, p in enumerate(self.particles.T):
+            t = np.squeeze(p[2] - self.pose[2])
+            rot = np.array([[np.cos(t), -np.sin(t)], [np.sin(t), np.cos(t)]])
+            v = self.delta_pose[0:2, :]
+
+
+            local_delta = np.append(np.matmul(rot, v), [self.delta_pose[2]], axis=0)
+            # delta_std = abs(local_delta) * np.transpose([[1.5, 1.5, 0.9]])
+            #
+            # noisy_delta = np.random.normal(p.T+local_delta, delta_std, [3,1])
+
+            # rospy.loginfo(np.linalg.norm(self.delta_pose) - np.linalg.norm(local_delta))
+            self.particles[:, i] = p + np.squeeze(local_delta.T)
 
     def calc_prob(self):
         # Reweight particles based on compatibility with laser scan
@@ -134,9 +149,10 @@ class ParticleFilter():
 
             # Average the probability associated with each LIDAR reading
             for x, y in zip(lidar_x[::2],lidar_y[::2]):
-                dist = self.occupancy_field.get_closest_obstacle_distance(x,y)
-                prob = norm(0, self.lidar_std_dev).pdf(dist) / (0.4 / self.lidar_std_dev)
-                weight_sum += prob**3
+                if (np.isfinite(x) and np.isfinite(y)):
+                    dist = self.occupancy_field.get_closest_obstacle_distance(x,y)
+                    prob = norm(0, self.lidar_std_dev).pdf(dist) / (0.4 / self.lidar_std_dev)
+                    weight_sum += prob**3
             self.weights[i] = weight_sum / len(lidar_x[::2])
 
     def update_transform(self, pose, target_frame='base_laser_link'):
